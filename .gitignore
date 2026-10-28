@@ -1,0 +1,87 @@
+﻿# =====================================================================
+# NexusRAG - Git Ignore Configuration
+# =====================================================================
+
+# Environment variables & secrets (CRITICAL: Never commit API keys!)
+.env
+.env.local
+.env.*.local
+!.env.example
+.streamlit/secrets.toml
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+htmlcov/
+
+# Logs & Databases
+*.log
+nexusrag.log
+local-rag.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Data & Runtime Directories
+data/*
+!data/.gitkeep
+.cache/*
+.nv/*
+tmp/
+temp/
+
+# IDE & Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# Operating System specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini

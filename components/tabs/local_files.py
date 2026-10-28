@@ -1,0 +1,160 @@
+import hashlib
+
+import streamlit as st
+
+import utils.rag_pipeline as rag
+import utils.helpers as func
+from components.ingestion_prerequisites import (
+    ingestion_is_configured,
+)
+
+supported_files = (
+    "csv",
+    "docx",
+    "epub",
+    "ipynb",
+    "json",
+    "md",
+    "pdf",
+    "ppt",
+    "pptx",
+    "txt",
+    "xls",
+    "xlsx",
+)
+
+
+def _bytes_to_mb(size_in_bytes):
+    return size_in_bytes // (1024 * 1024)
+
+
+def upload_limit_help_text():
+    return (
+        f"Up to {func.MAX_UPLOAD_FILES} files. "
+        f"{_bytes_to_mb(func.MAX_UPLOAD_FILE_BYTES)}MB per file, "
+        f"{_bytes_to_mb(func.MAX_TOTAL_UPLOAD_BYTES)}MB total."
+    )
+
+
+def uploaded_files_signature(uploaded_files):
+    """Return a stable signature for the current uploader contents."""
+    return tuple(
+        (
+            uploaded_file.name,
+            uploaded_file.size,
+            uploaded_file.type,
+            hashlib.sha256(uploaded_file.getvalue()).hexdigest(),
+        )
+        for uploaded_file in uploaded_files
+    )
+
+
+def should_process_uploads(
+    current_signature,
+    processed_signature,
+    processing_signature,
+    query_engine,
+    failed_signature=None,
+):
+    """Return whether uploaded files need ingestion for the current app state."""
+    if current_signature in (processing_signature, failed_signature):
+        return False
+    return current_signature != processed_signature or query_engine is None
+
+
+def local_files():
+    # Force users to confirm Settings before uploading files
+    if ingestion_is_configured():
+        uploaded_files = st.file_uploader(
+            "Select Files",
+            accept_multiple_files=True,
+            type=supported_files,
+            help=upload_limit_help_text(),
+        )
+    else:
+        file_upload_container = st.container(border=True)
+        with file_upload_container:
+            uploaded_files = st.file_uploader(
+                "Select Files",
+                accept_multiple_files=True,
+                type=supported_files,
+                disabled=True,
+                help=upload_limit_help_text(),
+            )
+
+    if len(uploaded_files) > 0:
+        try:
+            func.validate_uploaded_files(uploaded_files)
+        except ValueError as err:
+            st.error(str(err))
+            return
+
+        current_upload_signature = uploaded_files_signature(uploaded_files)
+        source_identity = ("local_files", current_upload_signature)
+        source_is_active = (
+            st.session_state.get("active_source") == source_identity
+            and st.session_state["query_engine"] is not None
+        )
+        needs_processing = should_process_uploads(
+            current_upload_signature,
+            st.session_state["processed_file_signature"],
+            st.session_state["processing_file_signature"],
+            st.session_state["query_engine"],
+            st.session_state.get("failed_file_signature"),
+        )
+
+        if (
+            not needs_processing
+            and not source_is_active
+            and current_upload_signature == st.session_state["processed_file_signature"]
+            and current_upload_signature != st.session_state.get("failed_file_signature")
+        ):
+            st.caption("Another source is active for chat.")
+            needs_processing = st.button("Reimport Files", key="reimport_local_files")
+
+        status_container = st.empty()
+
+        if needs_processing:
+            with st.spinner("Processing..."):
+                st.session_state["processing_file_signature"] = (
+                    current_upload_signature
+                )
+                try:
+                    # Initiate the RAG pipeline only for new file contents or missing index state.
+                    error = rag.rag_pipeline(
+                        uploaded_files,
+                        status_container=status_container,
+                        source_identity=source_identity,
+                    )
+
+                    # Display errors (if any) or proceed
+                    if error is not None:
+                        st.session_state["failed_file_signature"] = current_upload_signature
+                        st.exception(error)
+                    else:
+                        st.session_state.pop("failed_file_signature", None)
+                        st.session_state["processed_file_signature"] = (
+                            current_upload_signature
+                        )
+                        source_is_active = True
+                finally:
+                    st.session_state["processing_file_signature"] = None
+        elif source_is_active:
+            rag.render_pipeline_status(
+                status_container,
+                st.session_state["file_ingestion_stages"],
+            )
+
+        if current_upload_signature == st.session_state.get("failed_file_signature"):
+            st.warning("Import failed. Adjust your settings or files, then retry.")
+            if st.session_state["query_engine"] is not None:
+                st.caption("The previous index is still available for chat.")
+            if st.button("Retry Import", key="retry_file_import"):
+                st.session_state.pop("failed_file_signature", None)
+                st.session_state["processed_file_signature"] = None
+                st.rerun()
+        elif (source_is_active
+              and current_upload_signature == st.session_state["processed_file_signature"]):
+            st.write(
+                "Your files are ready. Let's chat! 😎"
+            )  # TODO: This should be a button.

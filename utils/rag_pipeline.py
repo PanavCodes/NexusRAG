@@ -1,0 +1,276 @@
+from tempfile import TemporaryDirectory
+
+import streamlit as st
+
+import utils.helpers as func
+from utils.gemini import create_gemini_llm, get_gemini_api_key
+import utils.llama_index as llama_index
+import utils.logs as logs
+from utils.settings_validation import validate_chunk_settings
+
+MAX_INGESTED_DOCUMENTS = 1000
+MAX_INGESTED_TEXT_CHARS = 10 * 1024 * 1024
+
+
+def _document_text(document):
+    if hasattr(document, "get_content"):
+        return document.get_content() or ""
+    if hasattr(document, "text"):
+        return document.text or ""
+    return str(document)
+
+
+def validate_ingested_documents(documents):
+    if len(documents) > MAX_INGESTED_DOCUMENTS:
+        raise ValueError(
+            f"Too many documents were loaded. Limit: {MAX_INGESTED_DOCUMENTS}."
+        )
+
+    total_chars = sum(len(_document_text(document)) for document in documents)
+    if total_chars > MAX_INGESTED_TEXT_CHARS:
+        raise ValueError("Loaded documents exceed the ingestion text limit.")
+
+
+def render_pipeline_status(status_container, completed_stages, active_stage=None):
+    """Render truthful ingestion progress for the currently running pipeline."""
+    if status_container is None:
+        return
+
+    status_container.empty()
+    with status_container.container():
+        for stage in completed_stages:
+            st.caption(f"✔️ {stage}")
+        if active_stage is not None:
+            st.caption(f"⏳ {active_stage}")
+
+
+def render_embedding_progress(status_container, completed_stages, completed, total):
+    """Render exact embedding progress for the active indexing stage."""
+    if status_container is None:
+        return
+
+    progress = 0 if total == 0 else min(completed / total, 1)
+    progress_label = f"Generating Embeddings: {progress:.0%}"
+
+    status_container.empty()
+    with status_container.container():
+        for stage in completed_stages:
+            st.caption(f"✔️ {stage}")
+        st.caption("⏳ Generating Embeddings")
+        st.progress(progress, text=progress_label)
+        st.caption(f"{completed:,} / {total:,} chunks embedded")
+
+
+def render_completed_ingestion_status(status_container, completed_stages):
+    """Render final ingestion status without leaving stale progress widgets behind."""
+    if status_container is None:
+        return
+
+    status_container.empty()
+    with status_container.container():
+        for stage in completed_stages:
+            st.caption(f"✔️ {stage}")
+        # Replace the old progress-bar slots from the active embedding render.
+        # Streamlit can otherwise leave stale child elements visible for this
+        # run when the final render has fewer elements than the progress render.
+        st.empty()
+        st.empty()
+
+
+def rag_pipeline(
+    uploaded_files=None, documents=None, data_dir=None, source_identity=None, **kwargs
+):
+    """Commit a replacement index only after ingestion and cleanup succeed."""
+    status_key = kwargs.get("status_state_key", "file_ingestion_stages")
+    previous_stages = st.session_state.get(status_key, [])
+    completed = False
+    try:
+        if uploaded_files is not None:
+            func.validate_uploaded_files(uploaded_files)
+            if documents is not None or data_dir is not None:
+                raise ValueError("Select one ingestion source at a time.")
+            with TemporaryDirectory(prefix="nexusrag-upload-") as upload_dir:
+                result = _rag_pipeline(uploaded_files=uploaded_files, data_dir=upload_dir, **kwargs)
+        else:
+            if documents is None and data_dir is None:
+                raise ValueError("An ingestion source is required.")
+            result = _rag_pipeline(documents=documents, data_dir=data_dir, **kwargs)
+        result["active_source"] = source_identity
+        st.session_state.update(result)
+        completed = True
+        return None
+    except Exception as err:
+        return err
+    finally:
+        if not completed:
+            st.session_state[status_key] = previous_stages
+
+
+def _rag_pipeline(
+    uploaded_files: list = None,
+    documents: list = None,
+    data_dir: str | None = None,
+    status_container=None,
+    initial_stages: list[str] | None = None,
+    status_state_key: str = "file_ingestion_stages",
+    documents_loaded_stage: str = "Documents Loaded",
+):
+    """
+    RAG pipeline for Llama-based chatbots.
+
+    Parameters:
+        - uploaded_files (list, optional): List of files to be processed.
+            Files are staged in a private temporary directory by the caller.
+
+    Yields:
+        - str: Successive chunks of conversation from the AI model with context.
+
+    Raises:
+        - Exception: If there is an error retrieving answers from the AI model or creating the service context.
+
+    Notes:
+        Loads the explicitly supplied directory or documents and builds a session-local query engine.
+
+    Context:
+        - logs.log: A logger for logging events related to this function.
+
+    Side Effects:
+        - Creates a service context using the provided AI model and embedding file.
+        - Loads documents from the supplied source.
+        - The caller owns cleanup of temporary upload or clone directories.
+    """
+    completed_stages = list(initial_stages or [])
+
+    def record_completed_stages():
+        st.session_state[status_state_key] = list(completed_stages)
+
+    render_pipeline_status(status_container, completed_stages)
+
+    ingest_dir = data_dir
+
+    ######################################
+    # Create Llama-Index service-context #
+    # to use local LLMs and embeddings   #
+    ######################################
+
+    try:
+        provider = st.session_state.get("llm_provider")
+        if provider == "OpenRouter (Free Models)":
+            from utils.openrouter import create_openrouter_llm, get_openrouter_api_key
+            api_key = st.session_state.get("openrouter_api_key") or get_openrouter_api_key()
+            model_name = st.session_state.get("openrouter_model", "cohere/north-mini-code:free")
+            llm = create_openrouter_llm(
+                model=model_name,
+                api_key=api_key,
+                system_prompt=st.session_state.get("system_prompt"),
+            )
+        
+        else:
+            api_key = st.session_state.get("gemini_api_key") or get_gemini_api_key()
+            model_name = st.session_state.get("gemini_model", "gemini-3.5-flash-lite")
+            llm = create_gemini_llm(
+                model=model_name,
+                api_key=api_key,
+                system_prompt=st.session_state.get("system_prompt"),
+            )
+        completed_stages.append("LLM Initialized")
+        record_completed_stages()
+        render_pipeline_status(status_container, completed_stages)
+
+    except Exception as err:
+        logs.log.error(f"Failed to setup LLM: {str(err)}")
+        raise
+
+    ####################################
+    # Determine embedding model to use #
+    ####################################
+
+    embedding_backend = st.session_state.get("embedding_backend", "Gemini")
+
+    if embedding_backend == "OpenRouter":
+        from utils.openrouter import DEFAULT_OPENROUTER_EMBEDDING_MODEL
+        selected_embedding_model = st.session_state.get("openrouter_embedding_model", DEFAULT_OPENROUTER_EMBEDDING_MODEL)
+    else:
+        selected_embedding_model = st.session_state.get("gemini_embedding_model", "models/gemini-embedding-2")
+
+    try:
+        chunk_size, chunk_overlap = validate_chunk_settings(
+            st.session_state["chunk_size"], st.session_state["chunk_overlap"]
+        )
+        embed_model = llama_index.setup_embedding_model(
+            selected_embedding_model,
+            backend=embedding_backend,
+            
+        )
+        completed_stages.append("Embedding Model Ready")
+        record_completed_stages()
+        render_pipeline_status(status_container, completed_stages)
+    except Exception as err:
+        logs.log.error(f"Setting up Embedding Model failed: {str(err)}")
+        raise
+
+    try:
+        if documents is not None:
+            if len(documents) == 0:
+                raise ValueError("No documents were loaded from the selected source.")
+            validate_ingested_documents(documents)
+            ingested_documents = documents
+            completed_stages.append(documents_loaded_stage)
+            record_completed_stages()
+            render_pipeline_status(status_container, completed_stages)
+        else:
+            if uploaded_files is not None:
+                for uploaded_file in uploaded_files:
+                    with st.spinner(f"Processing {uploaded_file.name}..."):
+                        func.save_uploaded_file(uploaded_file, ingest_dir)
+                completed_stages.append("Files Uploaded")
+                record_completed_stages()
+                render_pipeline_status(status_container, completed_stages)
+
+            ingested_documents = llama_index.load_documents(ingest_dir)
+            if len(ingested_documents) == 0:
+                raise ValueError("No files were found to process.")
+            validate_ingested_documents(ingested_documents)
+            completed_stages.append(documents_loaded_stage)
+            record_completed_stages()
+            render_pipeline_status(status_container, completed_stages)
+    except Exception as err:
+        logs.log.error(f"Document Load Error: {str(err)}")
+        raise
+
+    ###########################################
+    # Create an index from ingested documents #
+    ###########################################
+
+    try:
+
+        def update_embedding_progress(completed, total):
+            if total is None or total == 0:
+                render_pipeline_status(
+                    status_container, completed_stages, "Generating Embeddings"
+                )
+                return
+            render_embedding_progress(
+                status_container, completed_stages, completed, total
+            )
+
+        render_pipeline_status(
+            status_container, completed_stages, "Generating Embeddings"
+        )
+        query_engine = llama_index.create_query_engine(
+            ingested_documents,
+            llm=llm,
+            embed_model=embed_model,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            progress_callback=update_embedding_progress,
+        )
+        completed_stages.append("Embeddings Generated")
+        completed_stages.append("Index Ready")
+        record_completed_stages()
+        render_completed_ingestion_status(status_container, completed_stages)
+    except Exception as err:
+        logs.log.error(f"Index Creation Error: {str(err)}")
+        raise
+
+    return {"query_engine": query_engine, "documents": ingested_documents, "llm": llm}

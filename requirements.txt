@@ -1,0 +1,37 @@
+# NexusRAG v2.0 - 100% Cloud-Powered Production Dependencies
+# Core Web Framework
+streamlit>=1.40.0
+streamlit-extras>=0.5.0
+streamlit-tags>=1.2.8
+python-dotenv>=1.0.0
+
+# RAG Engine & Core Indexing
+llama-index>=0.12.0
+llama-index-core>=0.12.0
+llama-index-readers-file>=0.4.0
+llama-index-readers-web>=0.3.0
+llama-index-embeddings-google-genai>=0.4.0
+llama-index-embeddings-openai>=0.3.0
+llama-index-llms-gemini>=0.4.0
+llama-index-llms-openrouter>=0.3.0
+
+# Cloud Model SDKs
+google-genai>=1.0.0
+openai>=1.50.0
+
+# Document & Tabular Parsers
+openpyxl>=3.1.2
+xlrd>=2.0.1
+xlsxwriter>=3.2.0
+pypdf>=5.0.0
+python-docx>=1.1.0
+docx2txt>=0.8
+python-pptx>=1.0.0
+beautifulsoup4>=4.12.0
+html2text>=2024.2.26
+ebooklib>=0.18
+
+# Security & Utilities
+pycryptodome>=3.20.0
+requests>=2.31.0
+pytest>=8.0.0

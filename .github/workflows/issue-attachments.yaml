@@ -1,0 +1,28 @@
+name: Attachment Reminder
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  remind:
+    if: contains(github.event.issue.labels.*.name, 'bug')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check issue for attachments
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const body = context.payload.issue.body || '';
+            if (!body.includes('https://github.com/user-attachments/')) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: 'Please provide a screenshot of the in-app state and/or a copy of your nexusrag.log file to help debug this issue. For more information, please checkout the [Troubleshooting Guide](docs/troubleshooting.md).'
+              });
+            }
