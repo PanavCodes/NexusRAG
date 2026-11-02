@@ -16,7 +16,7 @@ llama-index-llms-gemini>=0.4.0
 llama-index-llms-openrouter>=0.3.0
 
 # Cloud Model SDKs
-google-genai>=1.0.0
+google-genai>=2.33.0
 openai>=1.50.0
 
 # Document & Tabular Parsers
