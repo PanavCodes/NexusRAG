@@ -1,7 +1,7 @@
 # NexusRAG v2.0 - 100% Cloud-Powered Production Dependencies
 # Core Web Framework
 streamlit>=1.40.0
-streamlit-extras>=0.5.0
+streamlit-extras>=1.6.0
 streamlit-tags>=1.2.8
 python-dotenv>=1.0.0
 
