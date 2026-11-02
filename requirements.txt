@@ -32,6 +32,6 @@ html2text>=2024.2.26
 ebooklib>=0.18
 
 # Security & Utilities
-pycryptodome>=3.20.0
+pycryptodome>=4.2.0
 requests>=2.31.0
 pytest>=8.0.0
